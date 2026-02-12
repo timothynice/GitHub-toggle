@@ -6,10 +6,107 @@ struct GHAccount {
     let isActive: Bool
 }
 
+enum UsernameDisplayMode: String, Codable, CaseIterable {
+    case none
+    case short
+    case full
+
+    var title: String {
+        switch self {
+        case .none:
+            return "No username"
+        case .short:
+            return "Short username"
+        case .full:
+            return "Full username"
+        }
+    }
+}
+
+enum SymbolLibrary {
+    static let fallback = "circle.fill"
+    static let symbolNames: [String] = [
+        "circle.fill",
+        "person.fill",
+        "person.crop.circle.fill",
+        "person.2.fill",
+        "person.badge.shield.checkmark.fill",
+        "briefcase.fill",
+        "building.2.fill",
+        "desktopcomputer",
+        "laptopcomputer",
+        "terminal.fill",
+        "hammer.fill",
+        "wrench.and.screwdriver.fill",
+        "gearshape.fill",
+        "tag.fill",
+        "folder.fill",
+        "star.fill",
+        "flag.fill",
+        "bolt.fill",
+        "flame.fill",
+        "leaf.fill",
+        "globe.americas.fill",
+        "paperplane.fill",
+        "tray.full.fill",
+        "shippingbox.fill"
+    ]
+
+    static func resolvedSymbol(_ proposed: String?) -> String {
+        guard
+            let proposed,
+            !proposed.isEmpty,
+            NSImage(systemSymbolName: proposed, accessibilityDescription: nil) != nil
+        else {
+            return fallback
+        }
+        return proposed
+    }
+}
+
 struct AppConfig: Codable {
     var accountColors: [String: String] = [:]
     var defaultColorHex: String = "#FFFFFF"
-    var showFullUsername: Bool = true
+    var usernameDisplay: UsernameDisplayMode = .full
+    var accountIcons: [String: String] = [:]
+    var defaultIconSymbolName: String = SymbolLibrary.fallback
+
+    enum CodingKeys: String, CodingKey {
+        case accountColors
+        case defaultColorHex
+        case usernameDisplay
+        case accountIcons
+        case defaultIconSymbolName
+        case showFullUsername
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accountColors = try container.decodeIfPresent([String: String].self, forKey: .accountColors) ?? [:]
+        defaultColorHex = try container.decodeIfPresent(String.self, forKey: .defaultColorHex) ?? "#FFFFFF"
+        accountIcons = try container.decodeIfPresent([String: String].self, forKey: .accountIcons) ?? [:]
+        defaultIconSymbolName = SymbolLibrary.resolvedSymbol(
+            try container.decodeIfPresent(String.self, forKey: .defaultIconSymbolName)
+        )
+
+        if let display = try container.decodeIfPresent(UsernameDisplayMode.self, forKey: .usernameDisplay) {
+            usernameDisplay = display
+        } else {
+            let legacyFull = try container.decodeIfPresent(Bool.self, forKey: .showFullUsername) ?? true
+            usernameDisplay = legacyFull ? .full : .short
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(accountColors, forKey: .accountColors)
+        try container.encode(defaultColorHex, forKey: .defaultColorHex)
+        try container.encode(usernameDisplay, forKey: .usernameDisplay)
+        try container.encode(accountIcons, forKey: .accountIcons)
+        try container.encode(defaultIconSymbolName, forKey: .defaultIconSymbolName)
+    }
 }
 
 extension NSColor {
@@ -79,6 +176,13 @@ final class ConfigManager {
             return color
         }
         return NSColor(hex: config.defaultColorHex) ?? .white
+    }
+
+    func iconSymbol(for username: String) -> String {
+        if let symbol = config.accountIcons[username] {
+            return SymbolLibrary.resolvedSymbol(symbol)
+        }
+        return SymbolLibrary.resolvedSymbol(config.defaultIconSymbolName)
     }
 
     private func ensureFolderExists(_ url: URL) {
@@ -184,18 +288,29 @@ final class SettingsWindowController: NSWindowController {
     private let onSave: () -> Void
 
     private var colorWells: [String: NSColorWell] = [:]
+    private var iconPickers: [String: NSPopUpButton] = [:]
     private let defaultColorWell = NSColorWell(frame: .zero)
-    private let fullUsernameCheckbox = NSButton(checkboxWithTitle: "Show full username in status bar", target: nil, action: nil)
+    private let defaultIconPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let usernameDisplayPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+
+    private let accountColumnWidth: CGFloat = 170
+    private let iconColumnWidth: CGFloat = 260
+    private let colorColumnWidth: CGFloat = 54
+    private let rowSpacing: CGFloat = 10
+    private let introBottomSpacing: CGFloat = 14
+    private let sectionSpacing: CGFloat = 18
+    private let footerTopSpacing: CGFloat = 16
+    private let horizontalPadding: CGFloat = 20
+    private let topPadding: CGFloat = 24
+    private let bottomPadding: CGFloat = 12
 
     init(configManager: ConfigManager, accounts: [GHAccount], onSave: @escaping () -> Void) {
         self.configManager = configManager
         self.accounts = accounts
         self.onSave = onSave
 
-        let rowCount = max(accounts.count, 1)
-        let height = CGFloat(170 + rowCount * 36)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: height),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -205,6 +320,7 @@ final class SettingsWindowController: NSWindowController {
 
         super.init(window: window)
         buildUI()
+        sizeWindowToContent()
     }
 
     required init?(coder: NSCoder) {
@@ -216,21 +332,28 @@ final class SettingsWindowController: NSWindowController {
 
         let container = NSStackView()
         container.orientation = .vertical
-        container.spacing = 12
+        container.spacing = rowSpacing
         container.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(container)
 
         NSLayoutConstraint.activate([
-            container.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            container.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            container.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
-            container.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -16)
+            container.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: horizontalPadding),
+            container.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -horizontalPadding),
+            container.topAnchor.constraint(equalTo: contentView.topAnchor, constant: topPadding),
+            container.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -bottomPadding)
         ])
 
-        let intro = NSTextField(labelWithString: "Assign a color to each GitHub account.")
+        let intro = NSTextField(labelWithString: "Assign a color and icon to each GitHub account.")
         intro.lineBreakMode = .byWordWrapping
         intro.maximumNumberOfLines = 2
         container.addArrangedSubview(intro)
+        container.addArrangedSubview(makeVerticalSpacer(height: introBottomSpacing))
+
+        let headerRow = makeSettingsRow()
+        headerRow.addArrangedSubview(makeColumnHeader("Account", width: accountColumnWidth))
+        headerRow.addArrangedSubview(makeColumnHeader("Icon", width: iconColumnWidth))
+        headerRow.addArrangedSubview(makeColumnHeader("Color", width: colorColumnWidth))
+        container.addArrangedSubview(headerRow)
 
         if accounts.isEmpty {
             let emptyLabel = NSTextField(labelWithString: "No accounts found. Run `gh auth login` first.")
@@ -238,55 +361,69 @@ final class SettingsWindowController: NSWindowController {
             container.addArrangedSubview(emptyLabel)
         } else {
             for account in accounts {
-                let row = NSStackView()
-                row.orientation = .horizontal
-                row.alignment = .centerY
-                row.distribution = .fill
-                row.spacing = 10
+                let row = makeSettingsRow()
+                let label = makeAccountLabel(account.username, width: accountColumnWidth)
 
-                let label = NSTextField(labelWithString: account.username)
-                label.font = .systemFont(ofSize: 12, weight: .medium)
-                label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+                let iconPicker = makeSymbolPicker(selectedSymbolName: configManager.iconSymbol(for: account.username))
+                constrainWidth(iconPicker, iconColumnWidth)
+                iconPickers[account.username] = iconPicker
 
                 let colorWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 50, height: 24))
                 colorWell.color = configManager.color(for: account.username)
+                constrainWidth(colorWell, colorColumnWidth)
                 colorWells[account.username] = colorWell
 
                 row.addArrangedSubview(label)
+                row.addArrangedSubview(iconPicker)
                 row.addArrangedSubview(colorWell)
                 container.addArrangedSubview(row)
             }
         }
 
-        let defaultRow = NSStackView()
-        defaultRow.orientation = .horizontal
-        defaultRow.alignment = .centerY
-        defaultRow.distribution = .fill
-        defaultRow.spacing = 10
+        container.addArrangedSubview(makeVerticalSpacer(height: sectionSpacing))
+        let defaultLabel = NSTextField(labelWithString: "Default appearance")
+        defaultLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        container.addArrangedSubview(defaultLabel)
 
-        let defaultLabel = NSTextField(labelWithString: "Default color")
-        defaultLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let defaultStyleRow = makeSettingsRow()
+        let defaultIconLabel = makeAccountLabel("Default", width: accountColumnWidth)
+
+        let defaultSymbol = SymbolLibrary.resolvedSymbol(configManager.config.defaultIconSymbolName)
+        configureSymbolPicker(defaultIconPicker, selectedSymbolName: defaultSymbol)
+        constrainWidth(defaultIconPicker, iconColumnWidth)
+
         defaultColorWell.color = NSColor(hex: configManager.config.defaultColorHex) ?? .white
+        constrainWidth(defaultColorWell, colorColumnWidth)
 
-        defaultRow.addArrangedSubview(defaultLabel)
-        defaultRow.addArrangedSubview(defaultColorWell)
-        container.addArrangedSubview(defaultRow)
+        defaultStyleRow.addArrangedSubview(defaultIconLabel)
+        defaultStyleRow.addArrangedSubview(defaultIconPicker)
+        defaultStyleRow.addArrangedSubview(defaultColorWell)
+        container.addArrangedSubview(defaultStyleRow)
 
-        fullUsernameCheckbox.state = configManager.config.showFullUsername ? .on : .off
-        container.addArrangedSubview(fullUsernameCheckbox)
+        let usernameDisplayRow = makeSettingsRow()
+        let usernameDisplayLabel = makeAccountLabel("Username display", width: accountColumnWidth)
+        configureDisplayModePicker()
+        constrainWidth(usernameDisplayPicker, iconColumnWidth)
+        let usernameSpacer = NSView(frame: .zero)
+        constrainWidth(usernameSpacer, colorColumnWidth)
+        usernameSpacer.setContentHuggingPriority(.required, for: .horizontal)
+
+        usernameDisplayRow.addArrangedSubview(usernameDisplayLabel)
+        usernameDisplayRow.addArrangedSubview(usernameDisplayPicker)
+        usernameDisplayRow.addArrangedSubview(usernameSpacer)
+        container.addArrangedSubview(usernameDisplayRow)
+        container.addArrangedSubview(makeVerticalSpacer(height: footerTopSpacing))
 
         let buttonRow = NSStackView()
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 10
         buttonRow.alignment = .centerY
-        buttonRow.distribution = .gravityAreas
+        buttonRow.distribution = .fill
 
-        let openFolderButton = NSButton(title: "Open Config Folder", target: self, action: #selector(openConfigFolder))
         let saveButton = NSButton(title: "Save", target: self, action: #selector(saveSettings))
         saveButton.keyEquivalent = "\r"
         let cancelButton = NSButton(title: "Close", target: self, action: #selector(closeWindow))
 
-        buttonRow.addArrangedSubview(openFolderButton)
         buttonRow.addArrangedSubview(NSView())
         buttonRow.addArrangedSubview(cancelButton)
         buttonRow.addArrangedSubview(saveButton)
@@ -296,10 +433,14 @@ final class SettingsWindowController: NSWindowController {
     @objc private func saveSettings() {
         var updated = configManager.config
         updated.defaultColorHex = defaultColorWell.color.toHexString()
-        updated.showFullUsername = (fullUsernameCheckbox.state == .on)
+        updated.defaultIconSymbolName = selectedSymbolName(from: defaultIconPicker)
+        updated.usernameDisplay = selectedDisplayMode()
 
         for (username, colorWell) in colorWells {
             updated.accountColors[username] = colorWell.color.toHexString()
+        }
+        for (username, iconPicker) in iconPickers {
+            updated.accountIcons[username] = selectedSymbolName(from: iconPicker)
         }
 
         configManager.update(updated)
@@ -311,9 +452,107 @@ final class SettingsWindowController: NSWindowController {
         close()
     }
 
-    @objc private func openConfigFolder() {
-        let folder = configManager.fileURL.deletingLastPathComponent()
-        NSWorkspace.shared.open(folder)
+    private func configureDisplayModePicker() {
+        usernameDisplayPicker.removeAllItems()
+
+        for mode in UsernameDisplayMode.allCases {
+            let item = NSMenuItem(title: mode.title, action: nil, keyEquivalent: "")
+            item.representedObject = mode.rawValue
+            usernameDisplayPicker.menu?.addItem(item)
+        }
+
+        if let selected = usernameDisplayPicker.itemArray.first(where: {
+            ($0.representedObject as? String) == configManager.config.usernameDisplay.rawValue
+        }) {
+            usernameDisplayPicker.select(selected)
+        } else {
+            usernameDisplayPicker.selectItem(at: 0)
+        }
+    }
+
+    private func selectedDisplayMode() -> UsernameDisplayMode {
+        guard
+            let rawValue = usernameDisplayPicker.selectedItem?.representedObject as? String,
+            let mode = UsernameDisplayMode(rawValue: rawValue)
+        else {
+            return .full
+        }
+        return mode
+    }
+
+    private func makeSymbolPicker(selectedSymbolName: String) -> NSPopUpButton {
+        let picker = NSPopUpButton(frame: .zero, pullsDown: false)
+        configureSymbolPicker(picker, selectedSymbolName: selectedSymbolName)
+        return picker
+    }
+
+    private func configureSymbolPicker(_ picker: NSPopUpButton, selectedSymbolName: String) {
+        picker.removeAllItems()
+
+        for symbolName in SymbolLibrary.symbolNames {
+            let item = NSMenuItem(title: symbolName, action: nil, keyEquivalent: "")
+            item.representedObject = symbolName
+            if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)) {
+                item.image = image
+            }
+            picker.menu?.addItem(item)
+        }
+
+        let resolved = SymbolLibrary.resolvedSymbol(selectedSymbolName)
+        if let selected = picker.itemArray.first(where: { ($0.representedObject as? String) == resolved }) {
+            picker.select(selected)
+        } else {
+            picker.selectItem(at: 0)
+        }
+    }
+
+    private func selectedSymbolName(from picker: NSPopUpButton) -> String {
+        SymbolLibrary.resolvedSymbol(picker.selectedItem?.representedObject as? String)
+    }
+
+    private func makeSettingsRow() -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.distribution = .fill
+        row.spacing = 12
+        return row
+    }
+
+    private func makeColumnHeader(_ title: String, width: CGFloat) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        constrainWidth(label, width)
+        return label
+    }
+
+    private func makeAccountLabel(_ title: String, width: CGFloat) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.setContentHuggingPriority(.required, for: .horizontal)
+        constrainWidth(label, width)
+        return label
+    }
+
+    private func constrainWidth(_ view: NSView, _ width: CGFloat) {
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalToConstant: width).isActive = true
+    }
+
+    private func makeVerticalSpacer(height: CGFloat) -> NSView {
+        let spacer = NSView(frame: .zero)
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.heightAnchor.constraint(equalToConstant: height).isActive = true
+        return spacer
+    }
+
+    private func sizeWindowToContent() {
+        guard let window = window, let contentView = window.contentView else { return }
+        contentView.layoutSubtreeIfNeeded()
+        let targetHeight = max(320, contentView.fittingSize.height)
+        window.setContentSize(NSSize(width: 620, height: targetHeight))
     }
 }
 
@@ -337,7 +576,9 @@ final class StatusBarController: NSObject {
         button.target = self
         button.action = #selector(statusItemPressed(_:))
         button.sendAction(on: [.leftMouseUp, .rightMouseUp])
-        button.title = "GH ?"
+        button.imagePosition = .imageLeading
+        button.image = statusImage(symbolName: "questionmark.circle", tintColor: .secondaryLabelColor)
+        button.attributedTitle = NSAttributedString(string: " GH ?")
     }
 
     private func startTimer() {
@@ -395,19 +636,24 @@ final class StatusBarController: NSObject {
         let menu = NSMenu()
         let titleItem = NSMenuItem(title: "GitHub Accounts", action: nil, keyEquivalent: "")
         titleItem.isEnabled = false
+        titleItem.image = menuImage(symbolName: "person.2.fill")
         menu.addItem(titleItem)
         menu.addItem(.separator())
 
         if accounts.isEmpty {
             let empty = NSMenuItem(title: "No accounts found", action: nil, keyEquivalent: "")
             empty.isEnabled = false
+            empty.image = menuImage(symbolName: "exclamationmark.triangle")
             menu.addItem(empty)
         } else {
             for account in accounts {
-                let item = NSMenuItem(title: account.username, action: #selector(selectAccount(_:)), keyEquivalent: "")
+                let isActive = account.isActive
+                let title = isActive ? "\(account.username) (Active)" : account.username
+                let item = NSMenuItem(title: title, action: #selector(selectAccount(_:)), keyEquivalent: "")
                 item.target = self
                 item.representedObject = account.username
-                item.state = account.isActive ? .on : .off
+                let tintColor = isActive ? configManager.color(for: account.username) : nil
+                item.image = menuImage(symbolName: configManager.iconSymbol(for: account.username), tintColor: tintColor)
                 menu.addItem(item)
             }
         }
@@ -416,14 +662,17 @@ final class StatusBarController: NSObject {
 
         let refresh = NSMenuItem(title: "Refresh", action: #selector(refreshAccountsAction), keyEquivalent: "r")
         refresh.target = self
+        refresh.image = menuImage(symbolName: "arrow.clockwise")
         menu.addItem(refresh)
 
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
+        settings.image = menuImage(symbolName: "gearshape")
         menu.addItem(settings)
 
         let quit = NSMenuItem(title: "Quit GH Status Toggle", action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
+        quit.image = menuImage(symbolName: "power")
         menu.addItem(quit)
 
         guard let button = statusItem.button else { return }
@@ -452,24 +701,79 @@ final class StatusBarController: NSObject {
         guard let button = statusItem.button else { return }
 
         guard let activeAccount = accounts.first(where: { $0.isActive }) ?? accounts.first else {
-            button.attributedTitle = NSAttributedString(string: "GH ?")
+            button.image = statusImage(symbolName: "questionmark.circle", tintColor: .secondaryLabelColor)
+            button.attributedTitle = NSAttributedString(string: " GH ?")
+            statusItem.length = NSStatusItem.variableLength
             button.toolTip = "No GitHub accounts found. Run: gh auth login"
             return
         }
 
-        let labelUsername = configManager.config.showFullUsername
-            ? activeAccount.username
-            : String(activeAccount.username.prefix(4))
+        let iconColor = configManager.color(for: activeAccount.username)
+        button.image = statusImage(symbolName: configManager.iconSymbol(for: activeAccount.username), tintColor: iconColor)
 
-        let dotColor = configManager.color(for: activeAccount.username)
-        let label = "● \(labelUsername)"
-        let attributed = NSMutableAttributedString(string: label)
-        attributed.addAttribute(.foregroundColor, value: dotColor, range: NSRange(location: 0, length: 1))
-        attributed.addAttribute(.foregroundColor, value: NSColor.labelColor, range: NSRange(location: 2, length: labelUsername.count))
-        attributed.addAttribute(.font, value: NSFont.systemFont(ofSize: 12, weight: .medium), range: NSRange(location: 0, length: label.count))
+        let usernameLabel = usernameText(for: activeAccount.username)
+        if usernameLabel.isEmpty {
+            button.attributedTitle = NSAttributedString(string: "")
+            statusItem.length = NSStatusItem.squareLength
+        } else {
+            let label = " \(usernameLabel)"
+            let attributed = NSMutableAttributedString(string: label)
+            attributed.addAttribute(.foregroundColor, value: NSColor.labelColor, range: NSRange(location: 0, length: label.count))
+            attributed.addAttribute(.font, value: NSFont.systemFont(ofSize: 12, weight: .medium), range: NSRange(location: 0, length: label.count))
+            button.attributedTitle = attributed
+            statusItem.length = NSStatusItem.variableLength
+        }
 
-        button.attributedTitle = attributed
+        button.imagePosition = .imageLeading
         button.toolTip = "Active GitHub account: \(activeAccount.username)"
+    }
+
+    private func usernameText(for username: String) -> String {
+        switch configManager.config.usernameDisplay {
+        case .none:
+            return ""
+        case .short:
+            return String(username.prefix(4))
+        case .full:
+            return username
+        }
+    }
+
+    private func statusImage(symbolName: String, tintColor: NSColor) -> NSImage? {
+        symbolImage(symbolName: symbolName, pointSize: 13, weight: .semibold, tintColor: tintColor)
+    }
+
+    private func menuImage(symbolName: String, tintColor: NSColor? = nil) -> NSImage? {
+        symbolImage(symbolName: symbolName, pointSize: 13, weight: .regular, tintColor: tintColor)
+    }
+
+    private func symbolImage(
+        symbolName: String,
+        pointSize: CGFloat,
+        weight: NSFont.Weight,
+        tintColor: NSColor?
+    ) -> NSImage? {
+        let resolved = SymbolLibrary.resolvedSymbol(symbolName)
+        guard let symbol = NSImage(systemSymbolName: resolved, accessibilityDescription: "Active GitHub account icon")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight))
+        else {
+            return nil
+        }
+
+        guard let tintColor else {
+            symbol.isTemplate = true
+            return symbol
+        }
+
+        let rect = NSRect(origin: .zero, size: symbol.size)
+        let tinted = NSImage(size: symbol.size)
+        tinted.lockFocus()
+        tintColor.setFill()
+        rect.fill()
+        symbol.draw(in: rect, from: .zero, operation: .destinationIn, fraction: 1.0)
+        tinted.unlockFocus()
+        tinted.isTemplate = false
+        return tinted
     }
 }
 

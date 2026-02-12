@@ -1,61 +1,109 @@
-# GH Status Toggle (macOS menu bar app)
+# GH Status Toggle
 
-Minimal status-bar app to switch GitHub CLI accounts quickly.
+Menu bar app for quickly switching between GitHub CLI (`gh`) accounts on macOS.
 
-## What it does
+## Features
 
-- Left-click the status item to toggle to the next `gh` account.
-- Right-click to see all accounts and switch directly.
-- Color dot shows which account is active at a glance.
-- Settings window lets you set a color per account.
+- Left-click the menu bar icon to switch to the next GitHub account.
+- Right-click to choose a specific account.
+- Per-account icon and color in the menu bar and menu.
+- Username display modes: none, short, or full.
+- Local config persisted between launches.
 
 ## Requirements
 
-- macOS 13+
-- GitHub CLI installed (`gh`)
-- Xcode Command Line Tools installed (`xcode-select --install`)
+- macOS 13 or newer
+- Xcode Command Line Tools
+- GitHub CLI (`gh`)
 
-## Build
+Install prerequisites:
 
 ```bash
-cd /path/to/GitHub-toggle
-chmod +x build.sh
+xcode-select --install
+brew install gh
+```
+
+## Quick Start
+
+```bash
+git clone https://github.com/timothynice/GitHub-toggle.git
+cd GitHub-toggle
+chmod +x *.sh
+./doctor.sh
+./run.sh
+```
+
+## Build, Run, Install
+
+Build the app bundle:
+
+```bash
 ./build.sh
 ```
 
-App is produced at:
-
-`./build/GHStatusToggle.app`
-
-## Install
-
-1. Move app to `/Applications`:
+Build and launch immediately:
 
 ```bash
-cp -R ./build/GHStatusToggle.app /Applications/
+./run.sh
 ```
 
-2. Open `/Applications/GHStatusToggle.app`.
-3. Grant permissions if macOS asks.
-4. (Optional) Add it to login items:
-   `System Settings -> General -> Login Items -> + -> GHStatusToggle.app`
-
-## Use
-
-- Ensure you already have multiple GitHub accounts authenticated in `gh`.
-- Add accounts if needed:
+Install for current user (recommended, no admin permission required):
 
 ```bash
-gh auth login
+./install.sh --launch
 ```
 
-- In the status bar:
-  - Left click: switch to next account.
-  - Right click: pick a specific account, open Settings, or quit.
-  - `Settings...`: pick per-account colors.
+Install system-wide to `/Applications`:
 
-## Config location
+```bash
+./install.sh --system --launch
+```
 
-The app saves settings here:
+Or use `make` shortcuts:
+
+```bash
+make doctor
+make build
+make run
+make install
+```
+
+## First-Time GitHub Setup
+
+Add/log into each account you want to switch between:
+
+```bash
+gh auth login -h github.com
+```
+
+Verify auth status:
+
+```bash
+gh auth status --hostname github.com
+```
+
+## Usage
+
+- Left-click status item: switch to next account.
+- Right-click status item: select account, refresh, open settings, or quit.
+- Settings:
+  - Per-account icon and color.
+  - Default icon and color fallback.
+  - Username display mode (`No username`, `Short username`, `Full username`).
+
+## Configuration
+
+Config file location:
 
 `~/Library/Application Support/GHStatusToggle/config.json`
+
+To reset app settings, quit the app and remove that file.
+
+## Troubleshooting
+
+- `No accounts found`
+  - Run `gh auth login -h github.com` and re-open the app.
+- `xcrun` or `swiftc` not found
+  - Install Xcode Command Line Tools: `xcode-select --install`
+- Build fails after environment changes
+  - Run `./doctor.sh`, then `./build.sh`
