@@ -29,7 +29,7 @@ check_command() {
   fi
 }
 
-echo "Running environment checks for GH Status Toggle..."
+echo "Running environment checks for Studi0Toggle..."
 
 if [[ ! -f "$ROOT_DIR/Sources/main.swift" ]]; then
   fail "Expected source file missing: $ROOT_DIR/Sources/main.swift"

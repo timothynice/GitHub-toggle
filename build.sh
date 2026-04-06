@@ -2,12 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_NAME="GHStatusToggle"
+APP_NAME="Studi0Toggle"
 BUILD_DIR="$ROOT_DIR/build"
 APP_DIR="$BUILD_DIR/${APP_NAME}.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
 MODULE_CACHE_DIR="$BUILD_DIR/module-cache"
+ICON_SOURCE="$ROOT_DIR/Assets/AppIcon.icns"
+ICON_DEST="$RESOURCES_DIR/AppIcon.icns"
 
 fatal() {
   echo "Error: $*" >&2
@@ -37,8 +40,14 @@ if [[ ! -f "$ROOT_DIR/Sources/main.swift" ]]; then
 fi
 
 rm -rf "$APP_DIR" "$MODULE_CACHE_DIR"
-mkdir -p "$MACOS_DIR" "$MODULE_CACHE_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$MODULE_CACHE_DIR"
 cp "$ROOT_DIR/Info.plist" "$CONTENTS_DIR/Info.plist"
+
+if [[ -f "$ICON_SOURCE" ]]; then
+  cp "$ICON_SOURCE" "$ICON_DEST"
+else
+  echo "Warning: App icon not found at $ICON_SOURCE (app will use default icon)" >&2
+fi
 
 "$SWIFTC" \
   -O \

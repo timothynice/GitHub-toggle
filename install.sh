@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_NAME="GHStatusToggle.app"
+APP_NAME="Studi0Toggle.app"
 BUILD_APP_PATH="$ROOT_DIR/build/$APP_NAME"
 INSTALL_BASE="$HOME/Applications"
 LAUNCH_AFTER_INSTALL=false

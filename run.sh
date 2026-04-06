@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP_PATH="$ROOT_DIR/build/GHStatusToggle.app"
+APP_PATH="$ROOT_DIR/build/Studi0Toggle.app"
 
 "$ROOT_DIR/build.sh"
 

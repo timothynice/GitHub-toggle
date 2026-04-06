@@ -1,5 +1,6 @@
 import Cocoa
 import Foundation
+import ServiceManagement
 
 struct GHAccount {
     let username: String
@@ -64,12 +65,21 @@ enum SymbolLibrary {
     }
 }
 
+enum AppIdentity {
+    static let appName = "Studi0Toggle"
+    static let legacyAppName = "GHStatusToggle"
+    static let configFileName = "config.json"
+    static let settingsWindowTitle = "\(appName) Settings"
+    static let quitMenuTitle = "Quit \(appName)"
+}
+
 struct AppConfig: Codable {
     var accountColors: [String: String] = [:]
     var defaultColorHex: String = "#FFFFFF"
     var usernameDisplay: UsernameDisplayMode = .full
     var accountIcons: [String: String] = [:]
     var defaultIconSymbolName: String = SymbolLibrary.fallback
+    var launchAtLogin: Bool = true
 
     enum CodingKeys: String, CodingKey {
         case accountColors
@@ -77,6 +87,7 @@ struct AppConfig: Codable {
         case usernameDisplay
         case accountIcons
         case defaultIconSymbolName
+        case launchAtLogin
         case showFullUsername
     }
 
@@ -90,6 +101,7 @@ struct AppConfig: Codable {
         defaultIconSymbolName = SymbolLibrary.resolvedSymbol(
             try container.decodeIfPresent(String.self, forKey: .defaultIconSymbolName)
         )
+        launchAtLogin = try container.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? true
 
         if let display = try container.decodeIfPresent(UsernameDisplayMode.self, forKey: .usernameDisplay) {
             usernameDisplay = display
@@ -106,6 +118,7 @@ struct AppConfig: Codable {
         try container.encode(usernameDisplay, forKey: .usernameDisplay)
         try container.encode(accountIcons, forKey: .accountIcons)
         try container.encode(defaultIconSymbolName, forKey: .defaultIconSymbolName)
+        try container.encode(launchAtLogin, forKey: .launchAtLogin)
     }
 }
 
@@ -144,9 +157,10 @@ final class ConfigManager {
 
     init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let folderURL = appSupport.appendingPathComponent("GHStatusToggle", isDirectory: true)
-        fileURL = folderURL.appendingPathComponent("config.json")
+        let folderURL = appSupport.appendingPathComponent(AppIdentity.appName, isDirectory: true)
+        fileURL = folderURL.appendingPathComponent(AppIdentity.configFileName)
         ensureFolderExists(folderURL)
+        migrateLegacyConfigIfNeeded(appSupportDirectory: appSupport)
         load()
     }
 
@@ -187,6 +201,45 @@ final class ConfigManager {
 
     private func ensureFolderExists(_ url: URL) {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    private func migrateLegacyConfigIfNeeded(appSupportDirectory: URL) {
+        guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+            return
+        }
+
+        let legacyFileURL = appSupportDirectory
+            .appendingPathComponent(AppIdentity.legacyAppName, isDirectory: true)
+            .appendingPathComponent(AppIdentity.configFileName)
+
+        guard FileManager.default.fileExists(atPath: legacyFileURL.path) else {
+            return
+        }
+
+        try? FileManager.default.copyItem(at: legacyFileURL, to: fileURL)
+    }
+}
+
+final class LaunchAtLoginManager {
+    private let service = SMAppService.mainApp
+
+    @discardableResult
+    func apply(enabled: Bool) -> Bool {
+        do {
+            if enabled {
+                if service.status != .enabled {
+                    try service.register()
+                }
+                return service.status == .enabled
+            }
+
+            if service.status == .enabled {
+                try service.unregister()
+            }
+            return service.status != .enabled
+        } catch {
+            return false
+        }
     }
 }
 
@@ -292,6 +345,7 @@ final class SettingsWindowController: NSWindowController {
     private let defaultColorWell = NSColorWell(frame: .zero)
     private let defaultIconPicker = NSPopUpButton(frame: .zero, pullsDown: false)
     private let usernameDisplayPicker = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let launchAtLoginCheckbox = NSButton(checkboxWithTitle: "Open at login", target: nil, action: nil)
 
     private let accountColumnWidth: CGFloat = 170
     private let iconColumnWidth: CGFloat = 260
@@ -315,7 +369,7 @@ final class SettingsWindowController: NSWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "GH Status Toggle Settings"
+        window.title = AppIdentity.settingsWindowTitle
         window.isReleasedWhenClosed = false
 
         super.init(window: window)
@@ -412,6 +466,19 @@ final class SettingsWindowController: NSWindowController {
         usernameDisplayRow.addArrangedSubview(usernameDisplayPicker)
         usernameDisplayRow.addArrangedSubview(usernameSpacer)
         container.addArrangedSubview(usernameDisplayRow)
+
+        let launchAtLoginRow = makeSettingsRow()
+        let launchAtLoginLabel = makeAccountLabel("Launch on startup", width: accountColumnWidth)
+        launchAtLoginCheckbox.state = configManager.config.launchAtLogin ? .on : .off
+        constrainWidth(launchAtLoginCheckbox, iconColumnWidth)
+        let launchAtLoginSpacer = NSView(frame: .zero)
+        constrainWidth(launchAtLoginSpacer, colorColumnWidth)
+        launchAtLoginSpacer.setContentHuggingPriority(.required, for: .horizontal)
+
+        launchAtLoginRow.addArrangedSubview(launchAtLoginLabel)
+        launchAtLoginRow.addArrangedSubview(launchAtLoginCheckbox)
+        launchAtLoginRow.addArrangedSubview(launchAtLoginSpacer)
+        container.addArrangedSubview(launchAtLoginRow)
         container.addArrangedSubview(makeVerticalSpacer(height: footerTopSpacing))
 
         let buttonRow = NSStackView()
@@ -435,6 +502,7 @@ final class SettingsWindowController: NSWindowController {
         updated.defaultColorHex = defaultColorWell.color.toHexString()
         updated.defaultIconSymbolName = selectedSymbolName(from: defaultIconPicker)
         updated.usernameDisplay = selectedDisplayMode()
+        updated.launchAtLogin = (launchAtLoginCheckbox.state == .on)
 
         for (username, colorWell) in colorWells {
             updated.accountColors[username] = colorWell.color.toHexString()
@@ -560,6 +628,7 @@ final class StatusBarController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let authService = GitHubAuthService()
     private let configManager = ConfigManager()
+    private let launchAtLoginManager = LaunchAtLoginManager()
     private var accounts: [GHAccount] = []
     private var refreshTimer: Timer?
     private var settingsWindowController: SettingsWindowController?
@@ -567,6 +636,7 @@ final class StatusBarController: NSObject {
     override init() {
         super.init()
         configureStatusItem()
+        applyLaunchAtLoginPreference()
         refreshAccounts()
         startTimer()
     }
@@ -610,6 +680,7 @@ final class StatusBarController: NSObject {
             configManager: configManager,
             accounts: accounts
         ) { [weak self] in
+            self?.applyLaunchAtLoginPreference()
             self?.refreshAccounts()
         }
 
@@ -670,7 +741,7 @@ final class StatusBarController: NSObject {
         settings.image = menuImage(symbolName: "gearshape")
         menu.addItem(settings)
 
-        let quit = NSMenuItem(title: "Quit GH Status Toggle", action: #selector(quitApp), keyEquivalent: "q")
+        let quit = NSMenuItem(title: AppIdentity.quitMenuTitle, action: #selector(quitApp), keyEquivalent: "q")
         quit.target = self
         quit.image = menuImage(symbolName: "power")
         menu.addItem(quit)
@@ -695,6 +766,10 @@ final class StatusBarController: NSObject {
     private func refreshAccounts() {
         accounts = authService.fetchAccounts()
         updateStatusBarLabel()
+    }
+
+    private func applyLaunchAtLoginPreference() {
+        _ = launchAtLoginManager.apply(enabled: configManager.config.launchAtLogin)
     }
 
     private func updateStatusBarLabel() {
